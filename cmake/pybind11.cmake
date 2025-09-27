@@ -13,38 +13,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-function(download_pybind11)
-  if(CMAKE_VERSION VERSION_LESS 3.11)
-    list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/Modules)
+# Offline-friendly pybind11 integration
+# - Prefer headers discovered from the active Python (pybind11.get_include())
+# - Alternatively, allow users to pass -DPYBIND11_INCLUDE_DIR=/path/to/pybind11/include
+# - Provide a lightweight pybind11_add_module() that avoids network fetches
+
+if(NOT DEFINED PYBIND11_INCLUDE_DIR)
+  execute_process(
+    COMMAND "${PYTHON_EXECUTABLE}" -c "import pybind11, sys; print(pybind11.get_include())"
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    OUTPUT_VARIABLE PYBIND11_INCLUDE_DIR
+    RESULT_VARIABLE PYBIND11_GET_INCLUDE_RC
+  )
+  if(NOT PYBIND11_GET_INCLUDE_RC EQUAL 0)
+    message(FATAL_ERROR "Could not locate pybind11 headers.\n"
+      "Either install pybind11 in your Python environment offline, or pass "
+      "-DPYBIND11_INCLUDE_DIR=/path/to/pybind11/include to CMake.")
   endif()
+endif()
 
-  include(FetchContent)
+message(STATUS "Using pybind11 headers at: ${PYBIND11_INCLUDE_DIR}")
 
-  set(pybind11_URL  "https://github.com/pybind/pybind11/archive/v2.6.0.tar.gz")
-  set(pybind11_HASH "SHA256=90b705137b69ee3b5fc655eaca66d0dc9862ea1759226f7ccd3098425ae69571")
-
-  set(double_quotes "\"")
-  set(dollar "\$")
-  set(semicolon "\;")
-  if(NOT WIN32)
-    FetchContent_Declare(pybind11
-      URL               ${pybind11_URL}
-      URL_HASH          ${pybind11_HASH}
-    )
-  else()
-    FetchContent_Declare(pybind11
-      URL               ${pybind11_URL}
-      URL_HASH          ${pybind11_HASH}
-    )
-  endif()
-
-  FetchContent_GetProperties(pybind11)
-  if(NOT pybind11_POPULATED)
-    message(STATUS "Downloading pybind11")
-    FetchContent_Populate(pybind11)
-  endif()
-  message(STATUS "pybind11 is downloaded to ${pybind11_SOURCE_DIR}")
-  add_subdirectory(${pybind11_SOURCE_DIR} ${pybind11_BINARY_DIR} EXCLUDE_FROM_ALL)
+function(pybind11_add_module target)
+  add_library(${target} MODULE ${ARGN})
+  target_include_directories(${target} PRIVATE ${PYBIND11_INCLUDE_DIR})
+  # Ensure Python module has no 'lib' prefix on UNIX
+  set_target_properties(${target} PROPERTIES PREFIX "")
+  # Position-independent code is typical for modules
+  set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endfunction()
-
-download_pybind11()
