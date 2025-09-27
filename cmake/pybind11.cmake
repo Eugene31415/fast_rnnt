@@ -13,32 +13,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-function(download_pybind11)
-  if(CMAKE_VERSION VERSION_LESS 3.11)
-    list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/Modules)
-  endif()
+# Offline-friendly pybind11 integration
+# - Prefer headers discovered from the active Python (pybind11.get_include())
+# - Alternatively, allow users to pass -DPYBIND11_INCLUDE_DIR=/path/to/pybind11/include
+# - Provide a lightweight pybind11_add_module() that avoids network fetches
 
-  include(FetchContent)
-
-  # Use a newer pybind11 compatible with Python 3.13 (2.12+)
-  set(pybind11_GIT_REPOSITORY  "https://github.com/pybind/pybind11.git")
-  set(pybind11_GIT_TAG        "v2.12.0")
-
-  set(double_quotes "\"")
-  set(dollar "\$")
-  set(semicolon "\;")
-  FetchContent_Declare(pybind11
-    GIT_REPOSITORY ${pybind11_GIT_REPOSITORY}
-    GIT_TAG        ${pybind11_GIT_TAG}
+if(NOT DEFINED PYBIND11_INCLUDE_DIR)
+  execute_process(
+    COMMAND "${PYTHON_EXECUTABLE}" -c "import pybind11, sys; print(pybind11.get_include())"
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    OUTPUT_VARIABLE PYBIND11_INCLUDE_DIR
+    RESULT_VARIABLE PYBIND11_GET_INCLUDE_RC
   )
-
-  FetchContent_GetProperties(pybind11)
-  if(NOT pybind11_POPULATED)
-    message(STATUS "Downloading pybind11")
-    FetchContent_Populate(pybind11)
+  if(NOT PYBIND11_GET_INCLUDE_RC EQUAL 0)
+    message(FATAL_ERROR "Could not locate pybind11 headers.\n"
+      "Either install pybind11 in your Python environment offline, or pass "
+      "-DPYBIND11_INCLUDE_DIR=/path/to/pybind11/include to CMake.")
   endif()
-  message(STATUS "pybind11 is downloaded to ${pybind11_SOURCE_DIR}")
-  add_subdirectory(${pybind11_SOURCE_DIR} ${pybind11_BINARY_DIR} EXCLUDE_FROM_ALL)
-endfunction()
+endif()
 
-download_pybind11()
+message(STATUS "Using pybind11 headers at: ${PYBIND11_INCLUDE_DIR}")
+
+function(pybind11_add_module target)
+  add_library(${target} MODULE ${ARGN})
+  target_include_directories(${target} PRIVATE ${PYBIND11_INCLUDE_DIR})
+  # Ensure Python module has no 'lib' prefix on UNIX
+  set_target_properties(${target} PROPERTIES PREFIX "")
+  # Position-independent code is typical for modules
+  set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endfunction()
