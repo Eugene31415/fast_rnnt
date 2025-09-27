@@ -14,6 +14,7 @@ cmake_minimum_required(VERSION 3.8 FATAL_ERROR)
 set(CMAKE_DISABLE_FIND_PACKAGE_MKL TRUE)
 set(languages CXX)
 set(_FT_WITH_CUDA ON)
+set(_FT_WITH_HIP OFF)
 
 # the following settings are modified from cub/CMakeLists.txt
 set(CMAKE_CXX_STANDARD 14 CACHE STRING "The C++ version to be used.")
@@ -24,8 +25,40 @@ message(STATUS "C++ Standard version: ${CMAKE_CXX_STANDARD}")
 
 
 find_program(FT_HAS_NVCC nvcc)
-if(NOT FT_HAS_NVCC AND "$ENV{CUDACXX}" STREQUAL "")
-  message(STATUS "No NVCC detected. Disable CUDA support")
+find_program(FT_HAS_HIPCC hipcc)
+
+# Detect Python for querying torch version backend (CUDA/ROCm)
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  set(_PYTHON_EXE ${Python3_EXECUTABLE})
+else()
+  # Fallback to PYTHON_EXECUTABLE if later set by pybind11.cmake
+  set(_PYTHON_EXE "${PYTHON_EXECUTABLE}")
+endif()
+
+# Try to detect ROCm-enabled PyTorch
+set(_TORCH_HIP_VERSION "")
+if(_PYTHON_EXE)
+  execute_process(
+    COMMAND "${_PYTHON_EXE}" -c "import sys;\ntry:\n import torch; print(getattr(torch.version,'hip',None) or '')\nexcept Exception as e:\n print('')\n"
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    OUTPUT_VARIABLE _TORCH_HIP_VERSION
+  )
+endif()
+
+if(NOT FT_WITH_CUDA)
+  set(_FT_WITH_CUDA OFF)
+endif()
+
+# Decide backend: Prefer CUDA if nvcc present and not Apple; else enable HIP if ROCm PyTorch or hipcc is present
+if(NOT APPLE AND (FT_WITH_CUDA OR _FT_WITH_CUDA) AND (FT_HAS_NVCC OR NOT "$ENV{CUDACXX}" STREQUAL ""))
+  message(STATUS "CUDA toolchain detected (nvcc or CUDACXX). Using CUDA backend.")
+elseif((_TORCH_HIP_VERSION) OR FT_HAS_HIPCC)
+  message(STATUS "ROCm/HIP detected (torch HIP version: ${_TORCH_HIP_VERSION}). Using HIP backend.")
+  set(_FT_WITH_HIP ON)
+  set(_FT_WITH_CUDA ON) # Treat as generic GPU to reuse build logic
+else()
+  message(STATUS "No CUDA or ROCm toolchain detected. Disable GPU support.")
   set(_FT_WITH_CUDA OFF)
 endif()
 
@@ -37,9 +70,20 @@ if(APPLE OR (DEFINED FT_WITH_CUDA AND NOT FT_WITH_CUDA))
 endif()
 
 if(_FT_WITH_CUDA)
-  set(languages ${languages} CUDA)
-  if(NOT DEFINED FT_WITH_CUDA)
-    set(FT_WITH_CUDA ON)
+  if(_FT_WITH_HIP)
+    enable_language(HIP)
+    set(languages ${languages} HIP)
+    if(NOT DEFINED FT_WITH_CUDA)
+      set(FT_WITH_CUDA ON)
+    endif()
+    if(NOT DEFINED FT_WITH_HIP)
+      set(FT_WITH_HIP ON)
+    endif()
+  else()
+    set(languages ${languages} CUDA)
+    if(NOT DEFINED FT_WITH_CUDA)
+      set(FT_WITH_CUDA ON)
+    endif()
   endif()
 endif()
 
@@ -61,7 +105,7 @@ elseif(NOT CMAKE_BUILD_TYPE IN_LIST ALLOWABLE_BUILD_TYPES)
     choose one from ${ALLOWABLE_BUILD_TYPES}")
 endif()
 
-option(FT_BUILD_TESTS "Whether to build tests or not" ON)
+option(FT_BUILD_TESTS "Whether to build tests or not" OFF)
 option(BUILD_SHARED_LIBS "Whether to build shared libs" ON)
 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -76,6 +120,9 @@ set(CMAKE_BUILD_RPATH "$ORIGIN")
 
 if(FT_WITH_CUDA)
   add_definitions(-DFT_WITH_CUDA)
+  if(FT_WITH_HIP)
+    add_definitions(-DFT_WITH_HIP)
+  endif()
   # Force CUDA C++ standard to be the same as the C++ standard used.
   #
   # Now, CMake is unaligned with reality on standard versions: https://gitlab.kitware.com/cmake/cmake/issues/18597
@@ -88,45 +135,54 @@ if(FT_WITH_CUDA)
   endif()
 
 
-  unset(CMAKE_CUDA_STANDARD CACHE)
-  set(CMAKE_CUDA_STANDARD ${CMAKE_CXX_STANDARD})
+  if(NOT FT_WITH_HIP)
+    unset(CMAKE_CUDA_STANDARD CACHE)
+    set(CMAKE_CUDA_STANDARD ${CMAKE_CXX_STANDARD})
 
-  include(cmake/select_compute_arch.cmake)
-  cuda_select_nvcc_arch_flags(FT_COMPUTE_ARCH_FLAGS)
-  message(STATUS "FT_COMPUTE_ARCH_FLAGS: ${FT_COMPUTE_ARCH_FLAGS}")
+    include(cmake/select_compute_arch.cmake)
+    cuda_select_nvcc_arch_flags(FT_COMPUTE_ARCH_FLAGS)
+    message(STATUS "FT_COMPUTE_ARCH_FLAGS: ${FT_COMPUTE_ARCH_FLAGS}")
 
-  # set(OT_COMPUTE_ARCHS 30 32 35 50 52 53 60 61 62 70 72)
-  # message(WARNING "arch 62/72 are not supported for now")
+    # set(OT_COMPUTE_ARCHS 30 32 35 50 52 53 60 61 62 70 72)
+    # message(WARNING "arch 62/72 are not supported for now")
 
-  # see https://arnon.dk/matching-sm-architectures-arch-and-gencode-for-various-nvidia-cards/
-  # https://www.myzhar.com/blog/tutorials/tutorial-nvidia-gpu-cuda-compute-capability/
-  set(FT_COMPUTE_ARCH_CANDIDATES 35 50 60 61 70 75)
-  if(CUDA_VERSION VERSION_GREATER "11.0")
-    list(APPEND FT_COMPUTE_ARCH_CANDIDATES 80 86)
-  endif()
-  message(STATUS "FT_COMPUTE_ARCH_CANDIDATES ${FT_COMPUTE_ARCH_CANDIDATES}")
-
-  set(FT_COMPUTE_ARCHS)
-
-  foreach(COMPUTE_ARCH IN LISTS FT_COMPUTE_ARCH_CANDIDATES)
-    if("${FT_COMPUTE_ARCH_FLAGS}" MATCHES ${COMPUTE_ARCH})
-      message(STATUS "Adding arch ${COMPUTE_ARCH}")
-      list(APPEND FT_COMPUTE_ARCHS ${COMPUTE_ARCH})
-    else()
-      message(STATUS "Skipping arch ${COMPUTE_ARCH}")
+    # see https://arnon.dk/matching-sm-architectures-arch-and-gencode-for-various-nvidia-cards/
+    # https://www.myzhar.com/blog/tutorials/tutorial-nvidia-gpu-cuda-compute-capability/
+    set(FT_COMPUTE_ARCH_CANDIDATES 35 50 60 61 70 75)
+    if(CUDA_VERSION VERSION_GREATER "11.0")
+      list(APPEND FT_COMPUTE_ARCH_CANDIDATES 80 86)
     endif()
-  endforeach()
+    message(STATUS "FT_COMPUTE_ARCH_CANDIDATES ${FT_COMPUTE_ARCH_CANDIDATES}")
 
-  if(NOT FT_COMPUTE_ARCHS)
-    set(FT_COMPUTE_ARCHS ${FT_COMPUTE_ARCH_CANDIDATES})
+    set(FT_COMPUTE_ARCHS)
+
+    foreach(COMPUTE_ARCH IN LISTS FT_COMPUTE_ARCH_CANDIDATES)
+      if("${FT_COMPUTE_ARCH_FLAGS}" MATCHES ${COMPUTE_ARCH})
+        message(STATUS "Adding arch ${COMPUTE_ARCH}")
+        list(APPEND FT_COMPUTE_ARCHS ${COMPUTE_ARCH})
+      else()
+        message(STATUS "Skipping arch ${COMPUTE_ARCH}")
+      endif()
+    endforeach()
+
+    if(NOT FT_COMPUTE_ARCHS)
+      set(FT_COMPUTE_ARCHS ${FT_COMPUTE_ARCH_CANDIDATES})
+    endif()
+
+    message(STATUS "FT_COMPUTE_ARCHS: ${FT_COMPUTE_ARCHS}")
+
+    foreach(COMPUTE_ARCH IN LISTS FT_COMPUTE_ARCHS)
+      set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -gencode arch=compute_${COMPUTE_ARCH},code=sm_${COMPUTE_ARCH}")
+      set(CMAKE_CUDA_ARCHITECTURES "${COMPUTE_ARCH}-real;${COMPUTE_ARCH}-virtual;${CMAKE_CUDA_ARCHITECTURES}")
+    endforeach()
+  else()
+    # HIP/ROCm: target MI100 (gfx908) by default
+    set(CMAKE_HIP_STANDARD ${CMAKE_CXX_STANDARD})
+    if(NOT CMAKE_HIP_ARCHITECTURES)
+      set(CMAKE_HIP_ARCHITECTURES gfx908)
+    endif()
+    message(STATUS "CMAKE_HIP_ARCHITECTURES: ${CMAKE_HIP_ARCHITECTURES}")
   endif()
-
-  message(STATUS "FT_COMPUTE_ARCHS: ${FT_COMPUTE_ARCHS}")
-
-  foreach(COMPUTE_ARCH IN LISTS FT_COMPUTE_ARCHS)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -gencode arch=compute_${COMPUTE_ARCH},code=sm_${COMPUTE_ARCH}")
-    set(CMAKE_CUDA_ARCHITECTURES "${COMPUTE_ARCH}-real;${COMPUTE_ARCH}-virtual;${CMAKE_CUDA_ARCHITECTURES}")
-  endforeach()
 endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/Modules)

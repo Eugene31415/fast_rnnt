@@ -16,6 +16,11 @@ endif()
 pybind11_add_module(_fast_rnnt ${fast_rnnt_srcs})
 target_link_libraries(_fast_rnnt PRIVATE mutual_information_core)
 
+if(FT_WITH_HIP)
+  set_source_files_properties(${fast_rnnt_srcs} PROPERTIES LANGUAGE HIP)
+  target_link_libraries(_fast_rnnt PRIVATE hip::device)
+endif()
+
 if(APPLE)
   target_link_libraries(_fast_rnnt
     PRIVATE

@@ -36,8 +36,7 @@ void PybindMutualInformation(py::module &m) {
 #ifdef FT_WITH_CUDA
           return MutualInformationCuda(px, py, boundary, p);
 #else
-          TORCH_CHECK(false, "Failed to find native CUDA module, make sure "
-                             "that you compiled the code with K2_WITH_CUDA.");
+          TORCH_CHECK(false, "This build has no GPU backend enabled.");
           return torch::Tensor();
 #endif
         }
@@ -57,8 +56,7 @@ void PybindMutualInformation(py::module &m) {
           return MutualInformationBackwardCuda(px, py, boundary, p, ans_grad,
                                                true);
 #else
-          TORCH_CHECK(false, "Failed to find native CUDA module, make sure "
-                             "that you compiled the code with K2_WITH_CUDA.");
+          TORCH_CHECK(false, "This build has no GPU backend enabled.");
           return std::vector<torch::Tensor>();
 #endif
         }
@@ -66,12 +64,12 @@ void PybindMutualInformation(py::module &m) {
       py::arg("px"), py::arg("py"), py::arg("boundary"), py::arg("p"),
       py::arg("ans_grad"));
 
-  m.def("with_cuda", []() -> bool {
+  m.def("with_cuda", []() -> bool { return
 #ifdef FT_WITH_CUDA
-    return true;
+    true
 #else
-    return false;
+    false
 #endif
-  });
+  ;});
 }
 } // namespace fast_rnnt
