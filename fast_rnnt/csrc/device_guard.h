@@ -20,6 +20,9 @@
 #define FAST_RNNT_CSRC_DEVICE_GUARD_H_
 
 #include "torch/script.h"
+#ifdef FT_WITH_HIP
+#include <hip/hip_runtime.h>
+#endif
 
 // This file is modified from
 // https://github.com/k2-fsa/k2/blob/master/k2/csrc/device_guard.h
@@ -65,7 +68,12 @@ public:
 
 private:
   static int32_t GetDevice() {
-#ifdef FT_WITH_CUDA
+#if defined(FT_WITH_HIP)
+    int32_t device;
+    auto s = hipGetDevice(&device);
+    TORCH_CHECK(s == hipSuccess, hipGetErrorString(s));
+    return device;
+#elif defined(FT_WITH_CUDA)
     int32_t device;
     auto s = cudaGetDevice(&device);
     TORCH_CHECK(s == cudaSuccess, cudaGetErrorString(s));
@@ -76,7 +84,10 @@ private:
   }
 
   static void SetDevice(int32_t device) {
-#ifdef FT_WITH_CUDA
+#if defined(FT_WITH_HIP)
+    auto s = hipSetDevice(device);
+    TORCH_CHECK(s == hipSuccess, hipGetErrorString(s));
+#elif defined(FT_WITH_CUDA)
     auto s = cudaSetDevice(device);
     TORCH_CHECK(s == cudaSuccess, cudaGetErrorString(s));
 #else

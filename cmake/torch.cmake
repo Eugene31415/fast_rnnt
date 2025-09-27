@@ -13,8 +13,11 @@ find_package(Torch REQUIRED)
 # set the global CMAKE_CXX_FLAGS so that
 # optimized_transducer uses the same abi flag as PyTorch
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
-if(OT_WITH_CUDA)
+if(OT_WITH_CUDA AND DEFINED CMAKE_CUDA_FLAGS)
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} ${TORCH_CXX_FLAGS}")
+endif()
+if(DEFINED CMAKE_HIP_FLAGS)
+  set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} ${TORCH_CXX_FLAGS}")
 endif()
 
 
@@ -38,7 +41,16 @@ execute_process(
 
 message(STATUS "PyTorch version: ${TORCH_VERSION}")
 
-if(OT_WITH_CUDA)
+execute_process(
+  COMMAND "${PYTHON_EXECUTABLE}" -c "import torch; print(getattr(torch.version,'hip',None) or '')"
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  OUTPUT_VARIABLE TORCH_HIP_VERSION
+)
+if(TORCH_HIP_VERSION)
+  message(STATUS "PyTorch HIP version: ${TORCH_HIP_VERSION}")
+endif()
+
+if(OT_WITH_CUDA AND NOT TORCH_HIP_VERSION)
   execute_process(
     COMMAND "${PYTHON_EXECUTABLE}" -c "import torch; print(torch.version.cuda)"
     OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -62,12 +74,16 @@ if(OT_WITH_CUDA)
 #
 # It contains only some -Wno-* flags, so it is OK
 # to set them to empty
-  set_property(TARGET torch_cuda
-    PROPERTY
-      INTERFACE_COMPILE_OPTIONS ""
-  )
-  set_property(TARGET torch_cpu
-    PROPERTY
-      INTERFACE_COMPILE_OPTIONS ""
-  )
+  if(TARGET torch_cuda)
+    set_property(TARGET torch_cuda
+      PROPERTY
+        INTERFACE_COMPILE_OPTIONS ""
+    )
+  endif()
+  if(TARGET torch_cpu)
+    set_property(TARGET torch_cpu
+      PROPERTY
+        INTERFACE_COMPILE_OPTIONS ""
+    )
+  endif()
 endif()

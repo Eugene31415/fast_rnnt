@@ -18,8 +18,12 @@
  * limitations under the License.
  */
 
+#ifdef FT_WITH_HIP
+#include <hip/hip_runtime.h>
+#else
 #include <c10/cuda/CUDAStream.h> // for getCurrentCUDAStream()
 #include <cooperative_groups.h>
+#endif
 
 #include "fast_rnnt/csrc/mutual_information.h"
 
