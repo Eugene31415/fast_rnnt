@@ -21,6 +21,22 @@
 
 #include "torch/script.h"
 
+#if defined(__HIP_PLATFORM_AMD__)
+#include <hip/hip_runtime.h>
+#ifndef cudaGetDevice
+#define cudaGetDevice hipGetDevice
+#endif
+#ifndef cudaSetDevice
+#define cudaSetDevice hipSetDevice
+#endif
+#ifndef cudaSuccess
+#define cudaSuccess hipSuccess
+#endif
+#ifndef cudaGetErrorString
+#define cudaGetErrorString hipGetErrorString
+#endif
+#endif
+
 // This file is modified from
 // https://github.com/k2-fsa/k2/blob/master/k2/csrc/device_guard.h
 namespace fast_rnnt {

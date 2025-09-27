@@ -17,3 +17,16 @@ add_library(mutual_information_core ${srcs})
 target_link_libraries(mutual_information_core PUBLIC ${TORCH_LIBRARIES})
 # for <torch/extension.h>
 target_include_directories(mutual_information_core PUBLIC ${PYTHON_INCLUDE_DIRS})
+
+if(_FT_WITH_HIP AND NOT _FT_WITH_CUDA)
+  # Ensure HIP compile options for MI100
+  target_compile_options(mutual_information_core PRIVATE --amdgpu-target=${AMDGPU_TARGETS})
+  # Treat .cu files as HIP sources
+  foreach(src IN LISTS srcs)
+    if(src MATCHES ".*\\.cu$")
+      set_source_files_properties(${src} PROPERTIES LANGUAGE HIP)
+    endif()
+  endforeach()
+  # Link HIP device library
+  target_link_libraries(mutual_information_core PUBLIC HIP::device)
+endif()

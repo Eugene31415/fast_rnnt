@@ -14,6 +14,7 @@ cmake_minimum_required(VERSION 3.8 FATAL_ERROR)
 set(CMAKE_DISABLE_FIND_PACKAGE_MKL TRUE)
 set(languages CXX)
 set(_FT_WITH_CUDA ON)
+set(_FT_WITH_HIP OFF)
 
 # the following settings are modified from cub/CMakeLists.txt
 set(CMAKE_CXX_STANDARD 14 CACHE STRING "The C++ version to be used.")
@@ -29,6 +30,13 @@ if(NOT FT_HAS_NVCC AND "$ENV{CUDACXX}" STREQUAL "")
   set(_FT_WITH_CUDA OFF)
 endif()
 
+# Detect HIP (ROCm)
+find_program(FT_HAS_HIPCC hipcc)
+if(FT_HAS_HIPCC)
+  set(_FT_WITH_HIP ON)
+  message(STATUS "Detected hipcc: enabling HIP/ROCm support")
+endif()
+
 if(APPLE OR (DEFINED FT_WITH_CUDA AND NOT FT_WITH_CUDA))
   if(_FT_WITH_CUDA)
     message(STATUS "Disable CUDA support")
@@ -38,9 +46,12 @@ endif()
 
 if(_FT_WITH_CUDA)
   set(languages ${languages} CUDA)
-  if(NOT DEFINED FT_WITH_CUDA)
-    set(FT_WITH_CUDA ON)
-  endif()
+endif()
+
+if(_FT_WITH_HIP AND NOT _FT_WITH_CUDA)
+  # only add HIP language if CUDA language is not used
+  enable_language(HIP)
+  set(languages ${languages} HIP)
 endif()
 
 message(STATUS "Enabled languages: ${languages}")
@@ -74,8 +85,12 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 set(CMAKE_INSTALL_RPATH "$ORIGIN")
 set(CMAKE_BUILD_RPATH "$ORIGIN")
 
-if(FT_WITH_CUDA)
+if(_FT_WITH_CUDA)
+  # Real CUDA toolchain
   add_definitions(-DFT_WITH_CUDA)
+  if(NOT DEFINED FT_WITH_CUDA)
+    set(FT_WITH_CUDA ON)
+  endif()
   # Force CUDA C++ standard to be the same as the C++ standard used.
   #
   # Now, CMake is unaligned with reality on standard versions: https://gitlab.kitware.com/cmake/cmake/issues/18597
@@ -127,6 +142,21 @@ if(FT_WITH_CUDA)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-extended-lambda -gencode arch=compute_${COMPUTE_ARCH},code=sm_${COMPUTE_ARCH}")
     set(CMAKE_CUDA_ARCHITECTURES "${COMPUTE_ARCH}-real;${COMPUTE_ARCH}-virtual;${CMAKE_CUDA_ARCHITECTURES}")
   endforeach()
+elseif(_FT_WITH_HIP)
+  # HIP/ROCm toolchain
+  add_definitions(-DFT_WITH_CUDA) # reuse CUDA code paths in sources
+  add_definitions(-DFT_WITH_HIP)
+  if(NOT DEFINED FT_WITH_CUDA)
+    set(FT_WITH_CUDA ON)
+  endif()
+  find_package(HIP REQUIRED)
+  # Target MI100 (gfx908) by default; allow override via AMDGPU_TARGETS
+  if(NOT DEFINED AMDGPU_TARGETS)
+    set(AMDGPU_TARGETS gfx908 CACHE STRING "List of AMDGPU targets")
+  endif()
+  # CMake 3.21+ supports CMAKE_HIP_ARCHITECTURES; fallback to compile options otherwise
+  set(CMAKE_HIP_ARCHITECTURES "${AMDGPU_TARGETS}")
+  message(STATUS "HIP AMDGPU_TARGETS: ${AMDGPU_TARGETS}")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/Modules)

@@ -18,8 +18,13 @@
  * limitations under the License.
  */
 
-#include <c10/cuda/CUDAStream.h> // for getCurrentCUDAStream()
+#if defined(__HIP_PLATFORM_AMD__)
+#include <hip/hip_runtime.h>
+#define __syncwarp() __syncthreads()
+#else
+#include <c10/cuda/CUDAStream.h>
 #include <cooperative_groups.h>
+#endif
 
 #include "fast_rnnt/csrc/mutual_information.h"
 
